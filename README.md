@@ -100,6 +100,41 @@ cd ../client && npm run dev
 - Add rate limiting and moderation review tooling
 - Replace placeholder profile defaults with editable profile settings
 
+## Deployment
+
+### Vercel
+
+Deploy the Next.js app from `client/`.
+
+Required client env vars:
+
+```sh
+NEXT_PUBLIC_SUPABASE_URL=...
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY=...
+NEXT_PUBLIC_API_URL=https://your-render-api.onrender.com
+NEXT_PUBLIC_LIVEKIT_URL=wss://your-livekit-host
+```
+
+There is a checked-in config at `client/vercel.json`.
+
+### Render
+
+Deploy the Express API from `server/`.
+
+Required server env vars:
+
+```sh
+WEB_ORIGIN=https://your-vercel-app.vercel.app
+DATABASE_URL=postgres://...
+NEXT_PUBLIC_SUPABASE_URL=...
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY=...
+LIVEKIT_URL=wss://your-livekit-host
+LIVEKIT_API_KEY=...
+LIVEKIT_API_SECRET=...
+```
+
+There is a checked-in Blueprint config at `render.yaml`. The API exposes `GET /health`, which Render can use as the health check.
+
 ## Test checklist
 
 - Google sign-in succeeds and redirects to `/dashboard`
