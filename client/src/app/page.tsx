@@ -86,6 +86,12 @@ export default function HomePage() {
         {errorCode === "google_auth_failed" && (
           <p className="small error-text">Google sign-in failed. Please try again.</p>
         )}
+        {errorCode === "google_auth_missing_code" && (
+          <p className="small error-text">
+            Google sign-in did not return an authorization code. Check the
+            Supabase Google redirect URL configuration and try again.
+          </p>
+        )}
         {errorCode === "missing_supabase_config" && (
           <p className="small error-text">
             Missing `NEXT_PUBLIC_SUPABASE_URL` or
