@@ -1,0 +1,111 @@
+SOCIAL LOGIN IMPLEMENTATION GUIDE
+
+Author: Jawad Shakeel Purpose: Step-by-step guide to implementing social
+login with: - Google (Gmail) - Facebook - Apple ID
+
+  -------------
+  1. OVERVIEW
+  -------------
+
+Social login allows users to authenticate using third-party identity
+providers instead of creating a separate username and password.
+
+All major providers use OAuth 2.0 or OpenID Connect (OIDC).
+
+Basic Flow (OAuth 2.0 / OIDC): 1. User clicks “Login with Provider” 2.
+Redirect to provider authorization page 3. User grants permission 4.
+Provider redirects back with authorization code 5. Backend exchanges
+code for access token 6. Backend fetches user profile 7. Create or log
+in user in your system
+
+  ---------------------------------
+  2. GOOGLE LOGIN (GMAIL ACCOUNT)
+  ---------------------------------
+
+A. Setup 1. Go to Google Cloud Console 2. Create a new project 3. Enable
+“Google Identity Services” or “OAuth 2.0” 4. Create OAuth 2.0
+Credentials 5. Add: - Authorized JavaScript origins - Authorized
+redirect URIs
+
+B. Backend Implementation 1. Install OAuth library (example:
+Passport.js, NextAuth, Firebase Auth) 2. Configure Google Client ID and
+Client Secret 3. Define callback URL 4. Exchange authorization code for
+token 5. Verify ID token (JWT) 6. Extract user info: - email - name -
+profile picture
+
+C. Save user in database if new.
+
+  -------------------
+  3. FACEBOOK LOGIN
+  -------------------
+
+A. Setup 1. Go to Facebook Developers portal 2. Create a new app 3. Add
+“Facebook Login” product 4. Configure: - Valid OAuth Redirect URIs 5.
+Copy App ID and App Secret
+
+B. Implementation Steps 1. Redirect user to:
+https://www.facebook.com/v18.0/dialog/oauth 2. After login, Facebook
+returns authorization code 3. Exchange code for access token 4. Call
+Graph API: https://graph.facebook.com/me?fields=id,name,email
+
+C. Store or authenticate user in your database.
+
+  -------------------
+  4. APPLE ID LOGIN
+  -------------------
+
+Apple uses OpenID Connect but requires extra configuration.
+
+A. Setup 1. Enroll in Apple Developer Program 2. Create App ID 3. Enable
+“Sign in with Apple” 4. Create Services ID 5. Generate private key 6.
+Configure return URL
+
+B. Implementation 1. Create JWT client secret using: - Team ID - Client
+ID - Private key 2. Redirect to Apple authorization endpoint 3. Receive
+authorization code 4. Exchange code for ID token 5. Verify ID token
+signature 6. Extract: - email - user identifier
+
+Note: Apple may only share email once.
+
+  -------------------------
+  5. FRONTEND INTEGRATION
+  -------------------------
+
+Add login buttons: - Continue with Google - Continue with Facebook -
+Continue with Apple
+
+Use SDKs: - Google Identity Services SDK - Facebook JavaScript SDK -
+Apple JS SDK
+
+Or use unified libraries like: - NextAuth - Firebase Authentication -
+Auth0 - Supabase Auth
+
+  ----------------------------
+  6. SECURITY BEST PRACTICES
+  ----------------------------
+
+1.  Always use HTTPS
+2.  Validate state parameter (prevent CSRF)
+3.  Verify ID tokens on backend
+4.  Never trust frontend tokens directly
+5.  Store minimal user data
+6.  Handle account linking carefully
+
+  -------------------------------------
+  7. DATABASE DESIGN (SIMPLE EXAMPLE)
+  -------------------------------------
+
+  : users - id (primary key) - email (unique) - name - provider
+  (google/facebook/apple) - provider_id - created_at
+
+  -------------------------
+  8. RECOMMENDED APPROACH
+  -------------------------
+
+If you are using: - Next.js → Use NextAuth - Firebase → Use Firebase
+Auth - Node.js + Express → Use Passport.js - Full SaaS → Use Auth0 or
+Clerk
+
+  -----------------
+  END OF DOCUMENT
+  -----------------
