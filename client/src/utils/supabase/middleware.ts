@@ -7,8 +7,8 @@ const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY;
 export const updateSession = async (request: NextRequest) => {
   let response = NextResponse.next({
     request: {
-      headers: request.headers
-    }
+      headers: request.headers,
+    },
   });
 
   if (!supabaseUrl || !supabaseKey) {
@@ -21,15 +21,20 @@ export const updateSession = async (request: NextRequest) => {
         return request.cookies.getAll();
       },
       setAll(cookiesToSet) {
-        cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+        cookiesToSet.forEach(({ name, value }) =>
+          request.cookies.set(name, value)
+        );
         response = NextResponse.next({
-          request
+          request,
         });
         cookiesToSet.forEach(({ name, value, options }) =>
           response.cookies.set(name, value, options)
         );
-      }
-    }
+      },
+    },
+    auth: {
+      flowType: "pkce",
+    },
   });
 
   await supabase.auth.getUser();
