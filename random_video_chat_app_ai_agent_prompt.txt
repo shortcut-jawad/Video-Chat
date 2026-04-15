@@ -1,0 +1,1074 @@
+AI AGENT IMPLEMENTATION BRIEF
+Project: Random Video Chat App with Google Sign-In
+Version: MVP v1
+Author intent: Build the app exactly around the idea described below, while keeping the architecture clean enough to scale later.
+
+======================================================================
+1. PRODUCT IDEA IN PLAIN WORDS
+======================================================================
+
+Build a mobile-first random video chat app where people sign up with Google, open the app, tap "Start Chat", and then see other users one by one as candidate profiles.
+
+The intended experience is this:
+
+- Assume 10 users are online.
+- Each user opens the app and clicks Start Chat.
+- The app begins showing each user the profiles of other currently-available users one by one.
+- For every shown profile, the user can either Accept or Reject.
+- If one user accepts but the other user does not accept yet, no call starts yet.
+- If both users accept each other, then a video call starts immediately.
+- During the call, if one user swipes left, the call ends.
+- After the call ends, that user returns to the waiting/matching flow and starts seeing the next profiles again.
+- The system should continue doing this in a loop as long as the user stays available.
+
+This is not a public room app. This is not a one-to-many livestream app.
+This is a 1-to-1 random matching app with mutual acceptance before the call.
+
+======================================================================
+2. IMPORTANT CONCEPTS THE IMPLEMENTATION MUST UNDERSTAND
+======================================================================
+
+The original idea mentions:
+- webhooks
+- WebRTC
+- WebRTC hooks
+
+These are not the same thing. The implementation must treat them correctly.
+
+A) WebRTC
+WebRTC is the actual browser/device technology that carries the audio/video stream between users. It handles media, peer connection setup, ICE candidates, NAT traversal, tracks, and connection state.
+
+B) Signaling
+WebRTC still needs a signaling mechanism to exchange:
+- SDP offer
+- SDP answer
+- ICE candidates
+- call state messages
+
+Signaling is not built into WebRTC. We must provide it ourselves using our backend or a realtime service.
+
+C) Webhooks
+Webhooks are server-to-server event notifications. They are useful for:
+- room started
+- room ended
+- participant joined
+- participant left
+- analytics
+- cleanup
+- moderation logging
+- async business logic
+
+Webhooks are NOT the primary way to do instant user-to-user accept/reject interaction and are NOT the thing that carries audio/video.
+
+D) React hooks / WebRTC hooks
+These are frontend abstractions to make the UI easier to build. Examples:
+- useRoomState
+- useParticipant
+- useTracks
+- custom hooks like useMatchingQueue, useLocalMedia, useCallSession
+
+Hooks improve developer experience. They are not the media layer themselves.
+
+Conclusion:
+- Use WebRTC (directly or through a managed product like LiveKit) for audio/video.
+- Use realtime signaling for negotiation and call state.
+- Use webhooks only for backend lifecycle handling, analytics, cleanup, moderation, and auditing.
+- Use hooks on the frontend to manage UI state cleanly.
+
+======================================================================
+3. RECOMMENDED ARCHITECTURE FOR MVP
+======================================================================
+
+Use this architecture unless there is a very strong reason not to:
+
+Frontend:
+- Next.js or React web app
+- Mobile-first responsive UI
+- TypeScript
+- Tailwind CSS
+- Zustand or React Context for local app state
+
+Backend / platform:
+- Supabase Auth for Google sign-in
+- Supabase Postgres for database
+- Supabase Realtime for online presence, queue state, and app-level signaling/events
+- Supabase Storage for profile avatars if needed
+- Supabase Edge Functions for protected server logic
+- LiveKit Cloud for video rooms and media transport
+- LiveKit webhooks for room lifecycle updates
+
+Why this is the best MVP choice:
+- Google sign-in is straightforward through Supabase.
+- Supabase gives auth, DB, realtime, storage, and server logic in one stack.
+- LiveKit reduces the complexity of raw WebRTC room management.
+- For a 1-to-1 app, LiveKit gives production-grade video faster than building raw peer logic from scratch.
+- The frontend can still use hooks and clean state.
+- The system can be launched faster and with fewer fragile networking issues.
+
+Alternative path:
+If you absolutely want raw WebRTC instead of LiveKit, implement:
+- Supabase Realtime Broadcast as signaling
+- Supabase Presence for online/ready state
+- STUN/TURN servers
+- custom RTCPeerConnection lifecycle
+This is possible, but more error-prone and slower for an AI coding agent to get right.
+
+Therefore:
+DEFAULT IMPLEMENTATION PATH = Supabase + LiveKit
+
+======================================================================
+4. PRODUCT SCOPE FOR MVP
+======================================================================
+
+Must have:
+- Google sign-in
+- user profile creation
+- profile photo, name, age or display details if desired
+- online status
+- "Start Chat" button
+- queue entry / exit
+- one-by-one candidate surfacing
+- accept / reject actions
+- mutual accept detection
+- start 1-to-1 video call
+- end call on left swipe or end button
+- return user to queue after call
+- basic block/report feature
+- prevent duplicate active calls
+- prevent showing blocked users
+- show waiting state when no candidates available
+
+Nice to have but not required in v1:
+- gender / country filters
+- premium boosts
+- text chat
+- friend requests
+- interest tags
+- call timers
+- moderation dashboard
+- automated NSFW moderation
+
+Out of scope for v1:
+- group calls
+- public livestream broadcasting
+- social feed
+- followers
+- gifts / payments
+- multi-device active sessions for same user
+
+======================================================================
+5. CORE USER STATES
+======================================================================
+
+Each user should move through clear states.
+
+Suggested user availability states:
+- offline
+- online_idle
+- queueing
+- browsing_candidates
+- waiting_for_mutual_accept
+- matched_pending_room
+- in_call
+- cooldown
+- blocked
+
+Suggested call session states:
+- proposed
+- mutual_match_found
+- room_creating
+- joining_room
+- in_progress
+- ending
+- ended
+- failed
+
+Important rule:
+A user can only be in one active call session at a time.
+A user should not receive new candidates while currently in an active call.
+
+======================================================================
+6. USER FLOW IN DETAIL
+======================================================================
+
+A) Sign in
+1. User opens app.
+2. User clicks "Continue with Google".
+3. Supabase Auth handles Google OAuth.
+4. On first login, create a profile row for the user.
+5. User lands on the home screen.
+
+B) Home screen
+User sees:
+- their profile summary
+- online indicator
+- Start Chat button
+- optional settings
+- report/block history access
+- camera/microphone permission status
+
+C) Start Chat
+1. When user clicks Start Chat:
+   - ask for camera/mic permissions if needed
+   - mark user as queueing / available
+   - publish realtime presence
+   - start candidate feed logic
+2. The system begins showing candidates one by one.
+
+D) Candidate card
+The candidate card can show:
+- photo
+- display name
+- age
+- country or city if enabled
+- bio or interest tags if enabled
+- online now indicator
+
+Actions:
+- Accept
+- Reject
+- Block
+- Report
+
+E) Accept flow
+1. User A sees User B and taps Accept.
+2. Save A -> B decision as accept.
+3. Check whether B has already accepted A within the active matching window.
+4. If yes:
+   - create a mutual match
+   - reserve both users atomically
+   - create call session
+   - generate video room/token
+   - push realtime "match_found" event to both users
+5. If no:
+   - keep A in waiting_for_mutual_accept or continue browsing depending on UX policy
+
+Recommended UX policy:
+- After A accepts B, A may continue browsing other candidates unless the system chooses a more exclusive model.
+- However, once a mutual match is formed, all other pending candidate actions for both users must be invalidated safely.
+
+F) Reject flow
+1. Save A -> B decision as reject.
+2. Do not show B again for a cooldown period (for example 24 hours or longer depending on product rules).
+3. Immediately move to the next candidate.
+
+G) Mutual accept
+If A accepted B and B accepted A:
+- lock both users
+- create the session
+- stop showing more candidates
+- transition both to matched_pending_room and then in_call
+
+H) During call
+Show:
+- local video
+- remote video
+- mute button
+- camera toggle
+- speaker toggle
+- end call button
+- left-swipe gesture to end
+- report/block shortcut
+
+I) End call
+If either side swipes left or presses end:
+- end session for both
+- leave the room
+- persist call end reason
+- mark users back to online_idle or queueing based on UX
+- by default, return them to queue if they still want to continue chatting
+
+======================================================================
+7. MATCHING LOGIC REQUIREMENTS
+======================================================================
+
+The candidate engine must not be random chaos. It needs rules.
+
+Base matching rules for MVP:
+- only show users who are online and queueing
+- do not show self
+- do not show blocked users
+- do not show users already rejected during cooldown
+- do not show users already in active call
+- do not show users already exhausted recently unless recycling is explicitly allowed
+- prefer users not seen recently
+- prefer users with compatible availability right now
+- ensure one active reservation per user
+
+Recommended candidate order:
+1. online users in queue
+2. not previously rejected
+3. not previously shown very recently
+4. not blocked
+5. not currently reserved
+6. optional randomization for fairness
+
+Important concurrency rule:
+Two users may be accepted by multiple people around the same time.
+The backend must atomically reserve users when forming a mutual match.
+
+This means:
+- use a transaction or server-side guarded function
+- before creating a match, re-check both users are still free
+- if either is already reserved or in call, abort and continue searching
+
+======================================================================
+8. DATABASE DESIGN
+======================================================================
+
+Use Supabase Postgres.
+
+Suggested tables:
+
+1) profiles
+Purpose:
+Store public user profile data.
+
+Columns:
+- id uuid primary key references auth.users(id)
+- username text unique nullable
+- full_name text nullable
+- avatar_url text nullable
+- bio text nullable
+- age int nullable
+- country text nullable
+- is_profile_complete boolean default false
+- created_at timestamptz default now()
+- updated_at timestamptz default now()
+
+2) user_presence
+Purpose:
+Current app-level presence snapshot.
+
+Columns:
+- user_id uuid primary key references profiles(id)
+- status text not null
+  allowed values: offline, online_idle, queueing, browsing_candidates, waiting_for_mutual_accept, matched_pending_room, in_call
+- is_online boolean default false
+- last_seen_at timestamptz default now()
+- current_session_id uuid nullable
+- current_room_name text nullable
+- updated_at timestamptz default now()
+
+Note:
+This table is app state. Supabase Realtime Presence can still be used in memory/channel form, but the DB table helps querying and auditing.
+
+3) candidate_actions
+Purpose:
+Store accept/reject/block/report decisions between users.
+
+Columns:
+- id bigserial primary key
+- actor_user_id uuid not null references profiles(id)
+- target_user_id uuid not null references profiles(id)
+- action text not null
+  allowed values: accept, reject, block, report
+- reason text nullable
+- created_at timestamptz default now()
+
+Indexes:
+- index on actor_user_id
+- index on target_user_id
+- composite index on (actor_user_id, target_user_id, action)
+
+4) active_matches
+Purpose:
+Track current mutual match / call session.
+
+Columns:
+- id uuid primary key default gen_random_uuid()
+- user_a_id uuid not null references profiles(id)
+- user_b_id uuid not null references profiles(id)
+- status text not null
+  allowed values: proposed, mutual_match_found, room_creating, joining_room, in_progress, ending, ended, failed
+- matched_at timestamptz default now()
+- started_at timestamptz nullable
+- ended_at timestamptz nullable
+- end_reason text nullable
+- room_name text nullable
+- provider text nullable default 'livekit'
+- created_by text nullable default 'system'
+
+Important constraints:
+- prevent same unordered pair from having multiple simultaneous active rows
+- maintain server-side validation that neither user is already active elsewhere
+
+5) match_reservations
+Purpose:
+Short-lived reservation lock so one user cannot be assigned twice at the same moment.
+
+Columns:
+- id uuid primary key default gen_random_uuid()
+- user_id uuid not null references profiles(id)
+- reserved_for_match_id uuid not null references active_matches(id)
+- expires_at timestamptz not null
+- created_at timestamptz default now()
+
+6) reports
+Purpose:
+Safety reporting.
+
+Columns:
+- id uuid primary key default gen_random_uuid()
+- reporter_user_id uuid not null references profiles(id)
+- target_user_id uuid not null references profiles(id)
+- active_match_id uuid nullable references active_matches(id)
+- reason text not null
+- details text nullable
+- created_at timestamptz default now()
+- reviewed boolean default false
+
+7) blocks
+Purpose:
+Permanent or long-term user blocking.
+
+Columns:
+- id uuid primary key default gen_random_uuid()
+- blocker_user_id uuid not null references profiles(id)
+- blocked_user_id uuid not null references profiles(id)
+- created_at timestamptz default now()
+
+Unique:
+- unique(blocker_user_id, blocked_user_id)
+
+8) seen_candidates
+Purpose:
+Track who has already been shown to whom.
+
+Columns:
+- id uuid primary key default gen_random_uuid()
+- viewer_user_id uuid not null references profiles(id)
+- candidate_user_id uuid not null references profiles(id)
+- last_shown_at timestamptz default now()
+- shown_count int default 1
+
+Unique:
+- unique(viewer_user_id, candidate_user_id)
+
+======================================================================
+9. ROW LEVEL SECURITY STRATEGY
+======================================================================
+
+Use Supabase RLS carefully.
+
+Profiles:
+- users can read public profile fields of other users if needed for candidate cards
+- users can only update their own profile
+
+Presence:
+- users can read presence of users eligible to be surfaced
+- users can only update their own presence row directly if allowed
+- sensitive transitions such as in_call should preferably be updated via server-side function
+
+Candidate actions:
+- users can insert their own actions
+- users should not read everyone else's decisions broadly
+- server-side functions may aggregate this securely
+
+Active matches:
+- users can read matches where they are user_a_id or user_b_id
+- users cannot arbitrarily insert room data from client
+- room creation should be server-side
+
+Reports and blocks:
+- users can create their own
+- users can read only their own reports/blocks unless admin workflow exists
+
+Important:
+All authoritative matching, reservation, and room-creation logic must be server-side, not trusted to the client.
+
+======================================================================
+10. REALTIME DESIGN
+======================================================================
+
+Use Supabase Realtime for app events and presence.
+Use LiveKit for media room connectivity.
+
+Suggested realtime channels:
+- user:{userId}
+  For private events sent to a single user, such as:
+  - match_found
+  - room_ready
+  - call_ended
+  - candidate_update
+
+- queue:lobby
+  For general queue presence if needed
+
+- match:{matchId}
+  For call/session state synchronization
+  - joined
+  - left
+  - ending
+  - ended
+  - report_submitted
+
+Realtime events needed:
+- USER_QUEUE_JOINED
+- USER_QUEUE_LEFT
+- CANDIDATE_ACCEPTED
+- CANDIDATE_REJECTED
+- MUTUAL_MATCH_FOUND
+- ROOM_CREATED
+- ROOM_JOIN_REQUEST
+- ROOM_JOINED
+- CALL_END_REQUEST
+- CALL_ENDED
+- USER_BLOCKED
+- USER_REPORTED
+
+Important rule:
+Realtime messages are useful for fast UI sync, but the database/server function remains the source of truth.
+
+======================================================================
+11. VIDEO LAYER DESIGN (RECOMMENDED: LIVEKIT)
+======================================================================
+
+Use LiveKit Cloud for 1-to-1 call rooms.
+
+Recommended room policy:
+- one room per active match
+- room name format:
+  match_{matchId}
+- server generates a room token for each participant
+- only the two matched participants may join that room
+
+Flow:
+1. Mutual match is found server-side.
+2. Server creates active_matches row.
+3. Server generates room name.
+4. Server creates or prepares LiveKit access token(s).
+5. Server sends token and room info to both users via private realtime event or protected API response.
+6. Both users join the room.
+7. Call starts.
+8. When one user ends the call:
+   - leave room
+   - notify other side
+   - mark session ended
+9. Use webhook callbacks to confirm participant join/leave and final room end.
+
+LiveKit webhooks should be used for:
+- participant joined
+- participant left
+- room finished
+- recording hooks later if ever added
+- audit logging
+- cleanup if client disconnects unexpectedly
+
+Frontend with LiveKit:
+- use LiveKit React components and hooks where convenient
+- build custom UI around them if needed
+
+Minimum in-call controls:
+- mute/unmute microphone
+- enable/disable camera
+- switch camera if mobile/native later
+- end call
+- left-swipe end gesture
+- connection state indicator
+
+======================================================================
+12. RAW WEBRTC FALLBACK DESIGN (ONLY IF NOT USING LIVEKIT)
+======================================================================
+
+If the implementation chooses raw WebRTC, then it must implement:
+
+- RTCPeerConnection per 1-to-1 session
+- getUserMedia for local media
+- SDP offer/answer exchange
+- ICE candidate exchange
+- STUN/TURN config
+- connection cleanup
+- perfect negotiation pattern to reduce glare/collision issues
+- robust disconnect handling
+
+Supabase Realtime can be used as signaling transport:
+- send offer
+- send answer
+- send ICE candidates
+- send call state events
+
+Required ICE servers:
+- STUN server(s)
+- TURN server(s) for relay fallback
+
+Without TURN, many real users on mobile networks or strict NATs will fail to connect reliably.
+
+Recommended if using raw WebRTC:
+- keep signaling private per match channel
+- never expose session info publicly
+- implement call timeout if the peer never joins
+- implement retries and cleanup
+- handle page refresh and reconnect cases
+
+But again:
+For MVP, LiveKit is strongly preferred.
+
+======================================================================
+13. GOOGLE SIGN-IN REQUIREMENTS
+======================================================================
+
+Use Supabase Auth with Google provider.
+
+Requirements:
+- configure Google OAuth app in Google Cloud
+- configure authorized JavaScript origins
+- configure redirect URLs correctly in Supabase and Google Cloud
+- use Supabase signInWithOAuth for Google
+- create or sync profile row on first login
+- persist auth session client-side securely
+
+On first login:
+- create profiles row if missing
+- optionally import Google full name and avatar
+- do not depend forever on Google avatar; allow local override later
+
+Auth rules:
+- unauthenticated users cannot enter queue
+- unauthenticated users cannot view private candidate feeds
+- unauthenticated users cannot receive call tokens
+
+======================================================================
+14. BACKEND / EDGE FUNCTION RESPONSIBILITIES
+======================================================================
+
+Create protected server-side functions or APIs for:
+
+1. create_or_update_profile
+- ensure profile exists after auth
+- update profile completion state
+
+2. enter_queue
+- validate authenticated user
+- ensure user is not already in call
+- set presence to queueing
+- clear stale reservation if any
+- return first candidate or acknowledgment
+
+3. leave_queue
+- remove from queueing state
+- clear browsing state if needed
+
+4. get_next_candidate
+- fetch best next candidate according to rules
+- exclude blocked/rejected/already-active users
+- mark candidate as shown in seen_candidates
+- return candidate profile
+
+5. submit_candidate_action
+Input:
+- target_user_id
+- action = accept | reject | block | report
+Behavior:
+- store action
+- if block, create block row and suppress future surfacing
+- if report, create report row
+- if accept, check mutual acceptance
+- if mutual, attempt atomic reservation and create match
+- return either next candidate or match_found payload
+
+6. create_match_if_mutual
+This should be internal server logic, not a public raw client endpoint.
+Behavior:
+- verify both users free
+- create match row
+- create reservations
+- prepare room
+- update presence
+- notify both clients
+
+7. get_room_join_payload
+- verify requester belongs to match
+- return room URL/token/name
+- only valid for active match
+
+8. end_call
+Input:
+- match_id
+- end_reason
+Behavior:
+- verify requester belongs to match
+- mark ended
+- release reservations
+- clear room state in presence
+- notify other participant
+- optionally requeue requester automatically
+
+9. auto_cleanup_stale_matches
+- scheduled cleanup for failed rooms, abandoned reservations, stale queue states
+
+======================================================================
+15. MATCHING ALGORITHM PSEUDOCODE
+======================================================================
+
+Pseudo logic for get_next_candidate(user_id):
+
+1. verify user authenticated
+2. verify user not blocked / not in active call
+3. build candidate pool:
+   - users currently queueing
+   - exclude self
+   - exclude blocked both directions
+   - exclude users with active in_progress or pending match
+   - exclude recent rejects
+   - exclude recently shown candidates if cooldown still active
+4. order by:
+   - not seen recently first
+   - random weight second
+   - active freshness
+5. return first candidate
+6. write/update seen_candidates
+
+Pseudo logic for accept(userA, userB):
+1. store action A accepts B
+2. check if B already accepted A and that accept is still valid
+3. if not mutual:
+   return { status: "accepted_waiting", nextCandidate: maybe_next }
+4. if mutual:
+   begin transaction
+   re-check both free
+   create active_match
+   create reservations
+   update presence for both
+   commit
+   generate room access
+   publish match_found to A and B
+   return { status: "match_found", matchId, roomPayload }
+
+======================================================================
+16. IMPORTANT CONCURRENCY AND DATA INTEGRITY RULES
+======================================================================
+
+The AI agent must pay special attention here.
+
+Problem:
+User B may be accepted by multiple users at nearly the same time.
+
+Required behavior:
+- only one active match can win
+- the winner is whichever transaction reserves B first
+- all losing attempts must fail gracefully and fetch a new candidate
+
+Rules:
+- use server-side transaction
+- use unique reservation logic
+- check active session before finalizing
+- use short-lived reservation TTL
+- clean stale reservations automatically
+
+Never rely on frontend timing for correctness.
+
+======================================================================
+17. UX DETAILS
+======================================================================
+
+Main screens:
+1. Splash / auth
+2. Complete profile
+3. Home / start chat
+4. Candidate browser
+5. Waiting / no candidates
+6. Call screen
+7. Report / block modal
+8. Settings / logout
+
+Candidate browser behavior:
+- show one candidate at a time
+- swipe right can map to Accept
+- swipe left can map to Reject if desired
+- explicit buttons should still exist
+- after every reject, immediately fetch next candidate
+- after accept, either show a waiting state or continue showing more profiles depending on policy
+
+Recommended MVP UX:
+- on accept, show "Interest sent" briefly and continue browsing
+- if mutual match happens, interrupt browsing and enter call
+This keeps the app lively when many users are online.
+
+In-call behavior:
+- if remote disconnects unexpectedly, show reconnect for a few seconds
+- if reconnect fails, end call cleanly
+- show a small banner like "Call ended"
+- automatically resume queue if user chose "Keep chatting"
+
+======================================================================
+18. SAFETY / TRUST / MODERATION BASELINE
+======================================================================
+
+Even MVP needs minimum safety controls.
+
+Required:
+- block user
+- report user
+- never show blocked users again
+- preserve report records
+- limit profile fields shown publicly
+- rate-limit action spam
+- detect excessive rapid accept/reject spam if possible
+- prevent joining rooms not belonging to the user
+- validate all room tokens server-side
+
+Recommended later:
+- moderation queue
+- image moderation for avatars
+- age verification if legally required by target market
+- country-based rules
+- abuse heuristics
+- shadow bans / throttling
+
+======================================================================
+19. PERFORMANCE AND SCALE NOTES
+======================================================================
+
+For MVP, this architecture is enough.
+
+When scaling:
+- move heavy matching logic into dedicated backend worker/service if needed
+- shard or optimize candidate selection queries
+- cache eligible candidate pools briefly
+- add stronger observability
+- add distributed locks if match volume becomes large
+- move from broad polling to event-driven candidate refresh where possible
+
+But do not over-engineer at v1 stage.
+Get correctness first.
+
+======================================================================
+20. ERROR HANDLING REQUIREMENTS
+======================================================================
+
+The app must gracefully handle:
+- no camera permission
+- no microphone permission
+- Google login failure
+- token expired
+- no candidates available
+- candidate became unavailable before action submitted
+- mutual accept race lost
+- room creation failure
+- peer never joined
+- peer disconnected
+- network reconnect
+- stale call UI after refresh
+- stale presence row after crash
+
+For each case:
+- show user-friendly error
+- update state cleanly
+- never leave the user stuck in ghost in_call status
+
+======================================================================
+21. IMPLEMENTATION PHASES FOR THE AI AGENT
+======================================================================
+
+PHASE 1: Project setup
+- initialize frontend app
+- connect Supabase
+- configure env variables
+- configure Google auth
+- create base layout and routing
+
+PHASE 2: Database and auth
+- create tables
+- add indexes
+- add RLS
+- create profile sync flow on first login
+- build settings/profile page
+
+PHASE 3: Queue and candidate system
+- implement presence
+- implement enter_queue / leave_queue
+- implement get_next_candidate
+- build candidate card UI
+- implement accept/reject/block/report actions
+
+PHASE 4: Mutual match engine
+- implement atomic match creation
+- implement reservations
+- implement private realtime events
+- implement match found transitions
+
+PHASE 5: Video room
+- integrate LiveKit
+- create token issuing endpoint
+- build call screen
+- add end call flow
+- add left-swipe to end
+
+PHASE 6: Cleanup and reliability
+- add webhook handler
+- add stale session cleanup
+- add reconnection handling
+- add analytics logging
+
+PHASE 7: Polishing
+- waiting states
+- empty states
+- loading skeletons
+- toasts
+- safety UI
+- profile completion checks
+
+======================================================================
+22. DELIVERABLES THE AI AGENT SHOULD PRODUCE
+======================================================================
+
+The AI agent should output:
+
+- frontend app
+- Supabase SQL migrations
+- Supabase RLS policies
+- Edge Functions or backend APIs
+- LiveKit token endpoint
+- webhook endpoint
+- environment variable documentation
+- README with local setup
+- README with production deployment steps
+- test checklist
+- basic seed/dev data strategy
+
+======================================================================
+23. ENVIRONMENT VARIABLES EXPECTED
+======================================================================
+
+Frontend:
+- NEXT_PUBLIC_SUPABASE_URL
+- NEXT_PUBLIC_SUPABASE_ANON_KEY
+- NEXT_PUBLIC_LIVEKIT_URL (if exposed to client as needed)
+
+Backend / server:
+- SUPABASE_SERVICE_ROLE_KEY
+- LIVEKIT_API_KEY
+- LIVEKIT_API_SECRET
+- LIVEKIT_WEBHOOK_SECRET
+- GOOGLE_CLIENT_ID (if separately needed)
+- GOOGLE_CLIENT_SECRET (if separately needed through provider config)
+- APP_BASE_URL
+
+Never expose service role key to client.
+
+======================================================================
+24. ACCEPTANCE CRITERIA FOR MVP
+======================================================================
+
+The implementation is successful if all of these are true:
+
+1. A new user can sign in with Google.
+2. A profile row is created automatically.
+3. Two or more online users can enter the queue.
+4. Users see candidate profiles one by one.
+5. Reject moves immediately to next candidate.
+6. Accept stores interest correctly.
+7. When both users accept each other, exactly one mutual match session is created.
+8. Both users receive room access securely.
+9. A 1-to-1 video call starts successfully.
+10. If either user ends the call, the session ends for both.
+11. After call end, users can continue browsing or re-enter queue.
+12. Blocked users are not shown again.
+13. Unauthorized users cannot access private room tokens or match data.
+14. The system does not leave ghost matches or duplicate active calls under normal race conditions.
+
+======================================================================
+25. EXPLICIT BUILD DECISIONS TO FOLLOW
+======================================================================
+
+Please follow these decisions exactly for the first build:
+
+- Build mobile-first responsive UI.
+- Use Google sign-in only for v1.
+- Use Supabase as auth/database/realtime backbone.
+- Use LiveKit for video.
+- Use server-side protected logic for mutual match creation.
+- Use webhooks only for backend lifecycle handling, not as media transport.
+- Use one-to-one call rooms.
+- End current call when one user swipes left.
+- After ending call, send the user back into the matching flow.
+- Keep the code modular so raw WebRTC can be substituted later if needed.
+
+======================================================================
+26. IF THE AI AGENT PREFERS RAW WEBRTC ANYWAY
+======================================================================
+
+If the implementing agent decides to avoid LiveKit, then it must still preserve the same product behavior and must add these tasks:
+
+- create secure signaling channels per match
+- implement RTCPeerConnection setup/teardown
+- implement perfect negotiation pattern
+- configure STUN/TURN
+- exchange ICE candidates through Supabase Realtime
+- handle media permissions and reconnection
+- protect signaling channels so only matched users can use them
+- ensure cleanup on disconnect and timeout
+
+Again, this is secondary. Use LiveKit first.
+
+======================================================================
+27. FINAL INSTRUCTION TO THE AI AGENT
+======================================================================
+
+Implement this as a production-minded MVP, not as a throwaway demo.
+Prioritize:
+1. correctness of mutual match logic
+2. secure room access
+3. clean state transitions
+4. stable video calls
+5. simple but polished user experience
+
+Do not simplify away the mutual accept mechanic.
+Do not convert this into a public room app.
+Do not rely on client-only logic for match creation.
+Do not use webhooks as a replacement for realtime signaling.
+Do not allow one user to be in multiple active calls at once.
+
+Build around the exact concept described in this brief.
+
+======================================================================
+28. HELPFUL REFERENCES FOR THE IMPLEMENTING AGENT
+======================================================================
+
+Official docs worth consulting during implementation:
+
+Supabase Auth overview:
+https://supabase.com/docs/guides/auth
+
+Supabase Google login:
+https://supabase.com/docs/guides/auth/social-login/auth-google
+
+Supabase redirect URLs:
+https://supabase.com/docs/guides/auth/redirect-urls
+
+Supabase Realtime overview:
+https://supabase.com/docs/guides/realtime
+
+Supabase Presence:
+https://supabase.com/docs/guides/realtime/presence
+
+Supabase Broadcast:
+https://supabase.com/docs/guides/realtime/broadcast
+
+Supabase signInWithOAuth reference:
+https://supabase.com/docs/reference/javascript/auth-signinwithoauth
+
+LiveKit overview:
+https://docs.livekit.io/intro/overview/
+
+LiveKit React components:
+https://docs.livekit.io/reference/components/react/
+
+LiveKit React useTracks hook:
+https://docs.livekit.io/reference/components/react/hook/usetracks/
+
+LiveKit webhooks:
+https://docs.livekit.io/intro/basics/rooms-participants-tracks/webhooks-events/
+
+MDN WebRTC:
+https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API
+
+MDN RTCPeerConnection:
+https://developer.mozilla.org/en-US/docs/Web/API/RTCPeerConnection
+
+MDN WebRTC signaling:
+https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API/Signaling_and_video_calling
+
+MDN STUN / TURN / protocols:
+https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API/Protocols
